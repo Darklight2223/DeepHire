@@ -4,13 +4,24 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import pymongo
 import fitz 
-import google.generativeai as genai
+import os
+
+from google import genai
+from google.genai import types
+
 import json
 from bson import ObjectId
 
+from dotenv import load_dotenv
 
-genai.configure(api_key="YOUR_GOOGLE_AI_API_KEY")  # Replace with your actual API key
-model = genai.GenerativeModel("models/gemini-1.5-flash-8b")  # Change Model if needed
+load_dotenv()  
+
+
+client_ai = genai.Client(
+    api_key=os.environ.get("GEMINI_API_KEY")
+)
+
+MODEL = "gemini-2.5-flash"
 
 client = pymongo.MongoClient("mongodb://localhost:27017")
 db = client["deephire"]
@@ -47,6 +58,8 @@ def extract_text_from_pdf(file: UploadFile):
     doc = fitz.open(stream=content, filetype="pdf")
     return "\n".join([page.get_text() for page in doc])
 
+
+
 def prompt_resume_parser(text):
     prompt = f"""
 You are a professional resume parser. Extract the following fields from the resume text below:
@@ -74,39 +87,70 @@ Return JSON with the following keys:
 
 Respond ONLY in valid JSON.
 """
+    
     try:
-        response = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+
+        response = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.1,
+            ),
+        )
+
         return json.loads(response.text)
+
     except Exception as e:
-        return {"error": "Parsing failed", "raw": response.text if 'response' in locals() else str(e)}
+
+        return {
+            "error": str(e)
+        }
 
 def prompt_section_improvement(section: str, items: List[str]):
     section_text = "\n".join(f"- {item}" for item in items)
     prompt = f"""
-You are a resume advisor. The user has this section in their resume:
+You are a resume reviewer.
 
-Section: {section}
+Section:
+{section}
 
+Content:
 {section_text}
 
-Give concise, resume-focused improvement suggestions.
-- Start each suggestion with "👉"
-- Do **not** use *, asterisks, **Markdown**, or numbered lists.
-- Keep tone professional helpful, and directly actionable.
+Give concise resume improvement suggestions.
+
+Rules:
+- One suggestion per line.
+- Start each with 👉
+- No markdown.
+- No numbering.
 """
     try:
-        response = model.generate_content(prompt)
-        suggestions = response.text.strip().split("\n")
-        return [s.lstrip("- ").strip() for s in suggestions if s.strip()]
+
+        response = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+        )
+
+        return [
+            line.strip()
+            for line in response.text.splitlines()
+            if line.strip()
+        ]
+
     except Exception as e:
-        return ["Gemini suggestion failed: " + str(e)]
+
+        return [str(e)]
 
 # -------------------- ROUTES --------------------
 
 @app.post("/upload")
 async def upload_resume(resume: UploadFile = File(...)):
     text = extract_text_from_pdf(resume)
+    print(text)
     parsed = prompt_resume_parser(text)
+    print(parsed)
     return parsed
 
 @app.post("/improve")
@@ -143,8 +187,16 @@ Be detailed but concise. Keep language professional and supportive.
 """
 
     try:
-        response = model.generate_content(prompt)
+        response = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+            ),
+        )
+
         return response.text.strip()
+
     except Exception as e:
         return f"❌ Gemini error: {str(e)}"
 
@@ -187,7 +239,14 @@ Return JSON with:
 Only return valid JSON.
 """
     try:
-        res = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        res = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
         return json.loads(res.text)
     except Exception as e:
         return {"score": 0, "reason": "Gemini failed", "error": str(e)}
@@ -242,7 +301,14 @@ Return JSON with:
 Only return valid JSON.
 """
     try:
-        res = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        res = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
         return json.loads(res.text)
     except Exception as e:
         return {
@@ -286,7 +352,10 @@ Guidelines:
 - Do not use Markdown, asterisks, or formatting
 """
     try:
-        res = model.generate_content(prompt)
+        res = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt
+        )
         return res.text.strip()
     except Exception as e:
         return f"❌ Gemini failed: {str(e)}"
@@ -328,7 +397,14 @@ Return JSON with:
 Only return valid JSON.
 """
     try:
-        res = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+        res = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=0.3,
+                response_mime_type="application/json"
+            )
+        )
         return json.loads(res.text)
     except Exception as e:
         return {"score": 0, "reason": "Search matching failed", "error": str(e)}
@@ -370,10 +446,23 @@ Return JSON with:
 Only return valid JSON.
 """
     try:
-        res = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
-        return json.loads(res.text)
+        response = client_ai.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.2,
+            ),
+        )
+
+        return json.loads(response.text)
+
     except Exception as e:
-        return {"score": 50, "reason": "Job evaluation failed", "error": str(e)}
+        return {
+            "score": 50,
+            "reason": "Job evaluation failed",
+            "error": str(e)
+        }
 
 
 @app.post("/match-jobs")
