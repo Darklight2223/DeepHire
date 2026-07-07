@@ -6,8 +6,7 @@ import pymongo
 import fitz 
 import os
 
-from google import genai
-from google.genai import types
+import groq
 
 import json
 from bson import ObjectId
@@ -17,11 +16,52 @@ from dotenv import load_dotenv
 load_dotenv()  
 
 
-client_ai = genai.Client(
-    api_key=os.environ.get("GEMINI_API_KEY")
+class GenerateContentConfig:
+    def __init__(self, temperature=0.3, response_mime_type=None):
+        self.temperature = temperature
+        self.response_mime_type = response_mime_type
+
+
+class types:
+    GenerateContentConfig = GenerateContentConfig
+
+
+class GroqGenerateContentResponse:
+    def __init__(self, text):
+        self.text = text
+
+
+class GroqModels:
+    def __init__(self, client):
+        self.client = client
+
+    def generate_content(self, model, contents, config=None):
+        temperature = getattr(config, "temperature", 0.3)
+        response_mime_type = getattr(config, "response_mime_type", None)
+        kwargs = {
+            "model": model,
+            "messages": [{"role": "user", "content": contents}],
+            "temperature": temperature,
+        }
+        if response_mime_type == "application/json":
+            kwargs["response_format"] = {"type": "json_object"}
+
+        response = self.client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content or ""
+        return GroqGenerateContentResponse(text)
+
+
+class GroqAIClient:
+    def __init__(self, api_key):
+        self.client = groq.Client(api_key=api_key)
+        self.models = GroqModels(self.client)
+
+
+client_ai = GroqAIClient(
+    api_key=os.environ.get("GROQ_API_KEY")
 )
 
-MODEL = "gemini-2.5-flash"
+MODEL = "llama-3.1-8b-instant"
 
 client = pymongo.MongoClient("mongodb://localhost:27017")
 db = client["deephire"]
@@ -148,9 +188,9 @@ Rules:
 @app.post("/upload")
 async def upload_resume(resume: UploadFile = File(...)):
     text = extract_text_from_pdf(resume)
-    print(text)
+    # print(text)
     parsed = prompt_resume_parser(text)
-    print(parsed)
+    # print(parsed)
     return parsed
 
 @app.post("/improve")
@@ -198,7 +238,7 @@ Be detailed but concise. Keep language professional and supportive.
         return response.text.strip()
 
     except Exception as e:
-        return f"❌ Gemini error: {str(e)}"
+        return f"❌ Groq error: {str(e)}"
 
 @app.post("/analyze/github")
 async def analyze_github(data: GitHubAnalysisRequest):
@@ -249,7 +289,7 @@ Only return valid JSON.
         )
         return json.loads(res.text)
     except Exception as e:
-        return {"score": 0, "reason": "Gemini failed", "error": str(e)}
+        return {"score": 0, "reason": "Groq failed", "error": str(e)}
 
 def generate_resume_score_prompt(resume: dict, job: dict):
     """Generate a resume match score based on resume and job details"""
@@ -358,10 +398,10 @@ Guidelines:
         )
         return res.text.strip()
     except Exception as e:
-        return f"❌ Gemini failed: {str(e)}"
+        return f"❌ Groq failed: {str(e)}"
 
 def generate_smart_search_match(job: dict, search_query: str):
-    """Use Gemini to intelligently match search query against job"""
+    """Use Groq to intelligently match search query against job"""
     prompt = f"""
 You are a job search matching assistant. Analyze if this job matches the search query.
 
@@ -410,7 +450,7 @@ Only return valid JSON.
         return {"score": 0, "reason": "Search matching failed", "error": str(e)}
 
 def generate_job_quality_score(job: dict):
-    """Use Gemini to evaluate job quality and attractiveness"""
+    """Use Groq to evaluate job quality and attractiveness"""
     prompt = f"""
 You are a job evaluation expert. Rate this job posting based on its overall quality and attractiveness to job seekers.
 
