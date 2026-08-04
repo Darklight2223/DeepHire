@@ -292,6 +292,13 @@ const BookmarkButton = ({ job }) => {
   );
 };
 
+const isValidExternalLink = value => {
+  if (!value || typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.toUpperCase() === 'N/A') return false;
+  return /^https?:\/\//i.test(trimmed);
+};
+
 const MatchPage = () => {
   const [jobs, setJobs] = useState([]);
   const [query, setQuery] = useState('');
@@ -411,14 +418,20 @@ const MatchPage = () => {
               </div>
 
               <div className="flex items-center justify-between">
-                <a
-                  href={job.applyLink}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 text-indigo-400 hover:underline text-sm"
-                >
-                  Apply via LinkedIn <FaExternalLinkAlt className="text-xs" />
-                </a>
+                {isValidExternalLink(job.applyLink) ? (
+                  <a
+                    href={job.applyLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 text-indigo-400 hover:underline text-sm"
+                  >
+                    Apply via LinkedIn <FaExternalLinkAlt className="text-xs" />
+                  </a>
+                ) : (
+                  <span className="inline-flex items-center gap-2 text-zinc-500 text-sm">
+                    Apply link not available
+                  </span>
+                )}
 
                 <button
                   onClick={() => setSelectedJob(job)}

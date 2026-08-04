@@ -3,6 +3,7 @@ import dbConnect from '@/app/lib/dbConnect';
 import Resume from '@/app/models/Resume';
 import { getSessionUser } from '@/app/lib/sessionHelper';
 import mongoose from 'mongoose';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function POST(req) {
   try {
@@ -12,9 +13,15 @@ export async function POST(req) {
     }
     await dbConnect();
 
-    const { 
-      name, email, phone, skills = [], education = [], achievements = [], 
-      experience = [], projects = [] 
+    const {
+      name,
+      email,
+      phone,
+      skills = [],
+      education = [],
+      achievements = [],
+      experience = [],
+      projects = []
     } = await req.json();
 
     const resume = await Resume.create({
@@ -37,6 +44,11 @@ export async function POST(req) {
         work: Array.isArray(proj.work) ? proj.work : []
       }))
     });
+
+    await Promise.all([
+      bumpCacheVersion(cacheKeys.profileVersion(session.userId)),
+      bumpCacheVersion(cacheKeys.resumeVersion(session.userId)),
+    ]);
 
     return NextResponse.json({ success: true, resumeId: resume._id });
   } catch (err) {

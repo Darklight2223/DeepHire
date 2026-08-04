@@ -17,6 +17,13 @@ const SeeJobs = () => {
   const [deleting, setDeleting] = useState(false);
   const [selectedJob, setSelectedJob] = useState(null);
 
+  const isValidExternalLink = value => {
+    if (!value || typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toUpperCase() === 'N/A') return false;
+    return /^https?:\/\//i.test(trimmed);
+  };
+
   useEffect(() => {
     const fetchJobs = async () => {
       try {
@@ -167,7 +174,16 @@ const SeeJobs = () => {
                 <p>Category: {selectedJob.category}</p>
                 <p>Experience: {selectedJob.experience}</p>
                 <p>Salary: {selectedJob.salary}</p>
-                <p>Apply Link: <a href={selectedJob.applyLink} className="text-indigo-400 underline" target="_blank">{selectedJob.applyLink}</a></p>
+                <p>
+                  Apply Link:{' '}
+                  {isValidExternalLink(selectedJob.applyLink) ? (
+                    <a href={selectedJob.applyLink} className="text-indigo-400 underline" target="_blank" rel="noopener noreferrer">
+                      {selectedJob.applyLink}
+                    </a>
+                  ) : (
+                    <span className="text-zinc-500">Not available</span>
+                  )}
+                </p>
                 <p>Posted on: {new Date(selectedJob.createdAt).toLocaleDateString()}</p>
                 <hr className="my-3 border-white/10" />
                 <div>

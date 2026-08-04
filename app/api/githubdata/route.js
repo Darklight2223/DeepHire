@@ -4,6 +4,7 @@ import { authOptions } from '../auth/[...nextauth]/route';
 import dbConnect from '@/app/lib/dbConnect';
 import Github from '@/app/models/Github';
 import User from '@/app/models/user';
+import { cacheKeys, getCacheVersion, getCachedJson } from '@/app/lib/redisCache';
 
 export async function GET(request) {
   try {
@@ -21,11 +22,20 @@ export async function GET(request) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const githubInfo = await Github.findOne({ userId: user._id });
+    const version = await getCacheVersion(cacheKeys.githubVersion(user._id.toString()));
+    const payload = await getCachedJson(
+      cacheKeys.githubData(user._id.toString(), version),
+      1800,
+      async () => {
+        const githubInfo = await Github.findOne({ userId: user._id });
 
-    return NextResponse.json({
-      githubRepos: githubInfo?.publicRepoCount || 0,
-    });
+        return {
+          githubRepos: githubInfo?.publicRepoCount || 0,
+        };
+      }
+    );
+
+    return NextResponse.json(payload);
   } catch (error) {
     console.error('Dashboard data error:', error);
     return NextResponse.json({ error: 'Server error' }, { status: 500 });

@@ -339,6 +339,13 @@ const MatchCard = ({ title, match, skills }) => (
 
 
 const SavedJobCard = ({ job, onDelete }) => {
+  const isValidExternalLink = value => {
+    if (!value || typeof value !== 'string') return false;
+    const trimmed = value.trim();
+    if (!trimmed || trimmed.toUpperCase() === 'N/A') return false;
+    return /^https?:\/\//i.test(trimmed);
+  };
+
   return (
     <div className="group relative bg-gradient-to-br from-zinc-900/80 to-zinc-800/80 backdrop-blur-xl border border-zinc-700/30 rounded-2xl p-5 hover:border-indigo-400/40 transition-all duration-500 hover:shadow-2xl hover:shadow-indigo-500/20 hover:scale-[1.02] hover:-translate-y-1">
       
@@ -406,18 +413,22 @@ const SavedJobCard = ({ job, onDelete }) => {
 
       {/* Bottom Section */}
       <div className="flex items-center justify-between pt-4 border-t border-zinc-700/30">
-     
-        <a
-          href={job.applyLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="relative bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:via-purple-500 hover:to-pink-500 text-white font-bold py-3 px-6 rounded-xl transition-all duration-300 flex items-center gap-2 shadow-xl hover:shadow-2xl group/btn overflow-hidden"
-        >
-        
-          <div className="absolute inset-0 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 blur-lg opacity-30 group-hover/btn:opacity-50 transition-opacity duration-300"></div>
-          <span className="relative z-10">Apply Now</span>
-          <FaExternalLinkAlt className="relative z-10 text-sm group-hover/btn:translate-x-1 group-hover/btn:scale-110 transition-all duration-300" />
-        </a>
+        {isValidExternalLink(job.applyLink) ? (
+          <a
+            href={job.applyLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="relative bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:via-purple-500 hover:to-pink-500 text-white font-bold py-3 px-6 rounded-xl transition-all duration-300 flex items-center gap-2 shadow-xl hover:shadow-2xl group/btn overflow-hidden"
+          >
+            <div className="absolute inset-0 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 blur-lg opacity-30 group-hover/btn:opacity-50 transition-opacity duration-300"></div>
+            <span className="relative z-10">Apply Now</span>
+            <FaExternalLinkAlt className="relative z-10 text-sm group-hover/btn:translate-x-1 group-hover/btn:scale-110 transition-all duration-300" />
+          </a>
+        ) : (
+          <span className="relative bg-zinc-700 text-zinc-300 font-bold py-3 px-6 rounded-xl flex items-center gap-2 border border-zinc-600">
+            Apply link not available
+          </span>
+        )}
 
      
         <div className="flex items-center gap-2 text-zinc-500">

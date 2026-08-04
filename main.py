@@ -5,11 +5,16 @@ from typing import List, Optional, Dict, Any
 import pymongo
 import fitz 
 import os
+import hashlib
+import socket
+import ssl
+from datetime import date, datetime
 
 import groq
 
 import json
 from bson import ObjectId
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -68,6 +73,10 @@ db = client["deephire"]
 jobs_collection = db["jobs"]
 resumes_collection = db["resumes"]
 
+REDIS_URL = os.environ.get("REDIS_URL")
+JOBS_VERSION_KEY = "deephire:cache:jobs:version"
+REDIS_DEBUG = os.environ.get("REDIS_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+
 app = FastAPI()
 
 app.add_middleware(
@@ -76,6 +85,213 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _encode_redis_command(parts):
+    encoded = [f"*{len(parts)}"]
+    for part in parts:
+        value = str(part)
+        encoded.append(f"${len(value.encode('utf-8'))}")
+        encoded.append(value)
+    return "\r\n".join(encoded).encode("utf-8") + b"\r\n"
+
+
+def _cache_log(message):
+    if REDIS_DEBUG:
+        print(f"[redis-cache] {message}")
+
+
+def _summarize_key(key):
+    text = str(key)
+    return text if len(text) <= 120 else f"{text[:117]}..."
+
+
+def _parse_redis_response(buffer: bytes, offset: int = 0):
+    if offset >= len(buffer):
+        return None
+
+    prefix = buffer[offset:offset + 1]
+    line_end = buffer.find(b"\r\n", offset)
+    if line_end == -1:
+        return None
+
+    if prefix == b"+":
+        return buffer[offset + 1:line_end].decode("utf-8"), line_end + 2
+
+    if prefix == b"-":
+        raise RuntimeError(buffer[offset + 1:line_end].decode("utf-8"))
+
+    if prefix == b":":
+        return int(buffer[offset + 1:line_end].decode("utf-8")), line_end + 2
+
+    if prefix == b"$":
+        bulk_length = int(buffer[offset + 1:line_end].decode("utf-8"))
+        if bulk_length == -1:
+            return None, line_end + 2
+
+        value_start = line_end + 2
+        value_end = value_start + bulk_length
+        if len(buffer) < value_end + 2:
+            return None
+        return buffer[value_start:value_end].decode("utf-8"), value_end + 2
+
+    if prefix == b"*":
+        item_count = int(buffer[offset + 1:line_end].decode("utf-8"))
+        values = []
+        current_offset = line_end + 2
+        for _ in range(item_count):
+            parsed = _parse_redis_response(buffer, current_offset)
+            if parsed is None:
+                return None
+            value, current_offset = parsed
+            values.append(value)
+        return values, current_offset
+
+    return None
+
+
+def _redis_request(command_parts):
+    if not REDIS_URL:
+        return None
+
+    parsed_url = urlparse(REDIS_URL)
+    is_tls = parsed_url.scheme == "rediss"
+    host = parsed_url.hostname or "localhost"
+    port = parsed_url.port or (6380 if is_tls else 6379)
+    password = parsed_url.password or ""
+    username = parsed_url.username or ""
+    database = int(parsed_url.path.lstrip("/")) if parsed_url.path and parsed_url.path != "/" else None
+
+    connection = socket.create_connection((host, port), timeout=3)
+    if is_tls:
+        context = ssl.create_default_context()
+        connection = context.wrap_socket(connection, server_hostname=host)
+
+    try:
+        commands = []
+        if password:
+            if username:
+                commands.append(["AUTH", username, password])
+            else:
+                commands.append(["AUTH", password])
+        if database is not None:
+            commands.append(["SELECT", database])
+        commands.append(command_parts)
+
+        buffer = b""
+
+        for parts in commands:
+            connection.sendall(_encode_redis_command(parts))
+
+            while True:
+                parsed = _parse_redis_response(buffer)
+                if parsed is not None:
+                    _, next_offset = parsed
+                    buffer = buffer[next_offset:]
+                    break
+
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Redis connection closed unexpectedly")
+                buffer += chunk
+
+        return parsed[0]
+    finally:
+        connection.close()
+
+
+def cache_get(key):
+    if not REDIS_URL:
+        _cache_log(f"disabled -> loader for {_summarize_key(key)}")
+        return None
+
+    try:
+        value = _redis_request(["GET", key])
+        _cache_log(f"{'hit' if value else 'miss'} {_summarize_key(key)}")
+        return value
+    except Exception as exc:
+        print(f"Redis cache read failed: {exc}")
+        return None
+
+
+def cache_setex(key, ttl_seconds, value):
+    if not REDIS_URL:
+        return None
+
+    try:
+        result = _redis_request(["SET", key, json.dumps(value, default=_json_default), "EX", str(ttl_seconds)])
+        _cache_log(f"write {_summarize_key(key)} ttl={ttl_seconds}")
+        return result
+    except Exception as exc:
+        print(f"Redis cache write failed: {exc}")
+        return None
+
+
+def cache_incr(key):
+    if not REDIS_URL:
+        return None
+
+    try:
+        value = _redis_request(["INCR", key])
+        _cache_log(f"version bump {_summarize_key(key)} -> {value}")
+        return value
+    except Exception as exc:
+        print(f"Redis version bump failed: {exc}")
+        return None
+
+
+def cache_version(key):
+    if not REDIS_URL:
+        _cache_log(f"version read default 0 {_summarize_key(key)}")
+        return 0
+
+    try:
+        value = cache_get(key)
+        version = int(value or 0)
+        _cache_log(f"version read {_summarize_key(key)} -> {version}")
+        return version
+    except Exception as exc:
+        print(f"Redis version read failed: {exc}")
+        return 0
+
+
+def profile_version_key(user_id):
+    return f"deephire:cache:user:{user_id}:profileVersion"
+
+
+def resume_version_key(user_id):
+    return f"deephire:cache:user:{user_id}:resumeVersion"
+
+
+def _json_default(value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, ObjectId):
+        return str(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def cached_json(key, ttl_seconds, loader):
+    cached_value = cache_get(key)
+    if cached_value:
+        try:
+            return json.loads(cached_value)
+        except Exception:
+            pass
+
+    value = loader()
+    cache_setex(key, ttl_seconds, value)
+    return value
+
+
+def cache_key(prefix, payload):
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return f"deephire:cache:{prefix}:{digest}"
+
+
+def jobs_cache_key(prefix, *parts):
+    joined = "|".join(str(part) for part in parts)
+    return cache_key(prefix, f"{joined}|jv{cache_version(JOBS_VERSION_KEY)}")
 
 class ImproveRequest(BaseModel):
     section: str
@@ -93,8 +309,7 @@ def convert_objectid_to_str(obj):
     else:
         return obj
 
-def extract_text_from_pdf(file: UploadFile):
-    content = file.file.read()
+def extract_text_from_pdf(content: bytes):
     doc = fitz.open(stream=content, filetype="pdf")
     return "\n".join([page.get_text() for page in doc])
 
@@ -187,16 +402,12 @@ Rules:
 
 @app.post("/upload")
 async def upload_resume(resume: UploadFile = File(...)):
-    text = extract_text_from_pdf(resume)
-    # print(text)
-    parsed = prompt_resume_parser(text)
-    # print(parsed)
-    return parsed
+    content = await resume.read()
+    return prompt_resume_parser(extract_text_from_pdf(content))
 
 @app.post("/improve")
 async def improve_section(req: ImproveRequest):
-    suggestions = prompt_section_improvement(req.section, req.items)
-    return {"suggestions": suggestions}
+    return {"suggestions": prompt_section_improvement(req.section, req.items)}
 
 
 class GitHubAnalysisRequest(BaseModel):
@@ -242,8 +453,7 @@ Be detailed but concise. Keep language professional and supportive.
 
 @app.post("/analyze/github")
 async def analyze_github(data: GitHubAnalysisRequest):
-    feedback = prompt_github_analysis(data.profile, data.repos)
-    return {"feedback": feedback}
+    return {"feedback": prompt_github_analysis(data.profile, data.repos)}
 
 class MatchRequest(BaseModel):
     userId: Optional[str] = None
@@ -510,6 +720,19 @@ async def match_jobs(req: MatchRequest):
     user_id = req.userId
     search = req.search or ""
     page = req.page or 1
+    resume_version = cache_version(resume_version_key(user_id)) if user_id else 0
+    jobs_version = cache_version(JOBS_VERSION_KEY)
+    cache_key_value = cache_key(
+        "match-jobs",
+        json.dumps({"userId": user_id, "search": search, "page": page, "resumeVersion": resume_version, "jobsVersion": jobs_version}, sort_keys=True)
+    )
+
+    cached_result = cache_get(cache_key_value)
+    if cached_result:
+        try:
+            return json.loads(cached_result)
+        except Exception:
+            pass
 
     # Get all jobs first
     jobs = list(jobs_collection.find({}))
@@ -558,21 +781,22 @@ async def match_jobs(req: MatchRequest):
     start = (page - 1) * per_page
     end = start + per_page
 
-    return {
+    result = {
         "total": len(jobs_sorted),
         "page": page,
         "jobs": jobs_sorted[start:end],
     }
 
+    cache_setex(cache_key_value, 1800, result)
+    return result
+
 @app.post("/suggest-improvements")
 async def suggest_improvements(req: SuggestRequest):
-    suggestions = generate_improvement_prompt(req.resume, req.job)
-    return {"suggestions": suggestions}
+    return {"suggestions": generate_improvement_prompt(req.resume, req.job)}
 
 @app.post("/resume-score")
 async def get_resume_score(req: ResumeScoreRequest):
-    score_data = generate_resume_score_prompt(req.resume, req.job)
-    return score_data
+    return generate_resume_score_prompt(req.resume, req.job)
 
 @app.get("/test-jobs")
 async def test_jobs():

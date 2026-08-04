@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/app/lib/dbConnect';
 import Job from '@/app/models/Job';
 import { getSessionUser } from '@/app/lib/sessionHelper';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function DELETE(request, { params }) {
   try {
@@ -20,6 +21,11 @@ export async function DELETE(request, { params }) {
     }
 
     await job.deleteOne();
+    await Promise.all([
+      bumpCacheVersion(cacheKeys.myJobsVersion(job.user.toString())),
+      bumpCacheVersion(cacheKeys.jobsVersion()),
+    ]);
+
     return NextResponse.json({ message: 'Job deleted successfully' });
   } catch (err) {
     console.error('Error deleting job:', err);

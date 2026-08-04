@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/app/lib/dbConnect';
 import Github from '@/app/models/Github';
 import { getSessionUser } from '@/app/lib/sessionHelper';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function POST(req) {
   try {
@@ -25,6 +26,12 @@ export async function POST(req) {
       },
       { upsert: true, new: true }
     );
+
+    await Promise.all([
+      bumpCacheVersion(cacheKeys.profileVersion(sessionUser.userId)),
+      bumpCacheVersion(cacheKeys.githubVersion(sessionUser.userId)),
+    ]);
+
     return NextResponse.json({ success: true, data: githubData });
   } catch (err) {
     console.error('GitHub sync save error:', err);

@@ -3,6 +3,7 @@ import dbConnect from '@/app/lib/dbConnect';
 import Job from '@/app/models/Job';
 import { getSessionUser } from '@/app/lib/sessionHelper';
 import mongoose from 'mongoose';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function POST(req) {
   try {
@@ -29,6 +30,11 @@ export async function POST(req) {
       logo: body.logo,
       description: body.description
     });
+
+    await Promise.all([
+      bumpCacheVersion(cacheKeys.myJobsVersion(session.userId)),
+      bumpCacheVersion(cacheKeys.jobsVersion()),
+    ]);
 
     return NextResponse.json({ success: true, jobId: job._id });
   } catch (err) {

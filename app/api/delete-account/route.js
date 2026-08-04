@@ -7,6 +7,7 @@ import Resume from '@/app/models/Resume';
 import Github from '@/app/models/Github';
 import SavedJob from '@/app/models/SavedJob';
 import Job from '@/app/models/Job';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function DELETE(request) {
   try {
@@ -41,6 +42,15 @@ export async function DELETE(request) {
       postedJobs: dataCheck[3],
     });
 
+
+    await Promise.all([
+      bumpCacheVersion(cacheKeys.profileVersion(userId.toString())),
+      bumpCacheVersion(cacheKeys.resumeVersion(userId.toString())),
+      bumpCacheVersion(cacheKeys.githubVersion(userId.toString())),
+      bumpCacheVersion(cacheKeys.savedJobsVersion(userId.toString())),
+      bumpCacheVersion(cacheKeys.myJobsVersion(userId.toString())),
+      bumpCacheVersion(cacheKeys.jobsVersion()),
+    ]);
     // Delete all user-related data with logging
     const deletionResults = await Promise.all([
   

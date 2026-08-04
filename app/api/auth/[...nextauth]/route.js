@@ -5,6 +5,7 @@ import LinkedInProvider from 'next-auth/providers/linkedin';
 import CredentialsProvider from 'next-auth/providers/credentials';
 import dbConnect from '../../../lib/dbConnect';
 import User from '../../../models/user';
+import { bumpCacheVersion, cacheKeys } from '../../../lib/redisCache';
 
 export const authOptions = {
   providers: [
@@ -59,17 +60,19 @@ export const authOptions = {
         
         if (!existingUser) {
           // Create new user for OAuth
-          await User.create({
+          const newUser = await User.create({
             name: user.name,
             email: user.email,
             provider: account.provider,
             providerId: account.providerAccountId,
           });
+          await bumpCacheVersion(cacheKeys.profileVersion(newUser._id.toString()));
         } else if (!existingUser.provider) {
           // Update existing email/password user to include OAuth
           existingUser.provider = account.provider;
           existingUser.providerId = account.providerAccountId;
           await existingUser.save();
+          await bumpCacheVersion(cacheKeys.profileVersion(existingUser._id.toString()));
         }
         
         return true;

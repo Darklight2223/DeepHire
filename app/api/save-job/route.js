@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import dbConnect from '@/app/lib/dbConnect';
 import SavedJob from '@/app/models/SavedJob';
 import { getSessionUser } from '@/app/lib/sessionHelper';
+import { bumpCacheVersion, cacheKeys } from '@/app/lib/redisCache';
 
 export async function POST(request) {
   try {
@@ -43,6 +44,8 @@ export async function POST(request) {
 
     await savedJob.save();
 
+    await bumpCacheVersion(cacheKeys.savedJobsVersion(session.userId));
+
     return NextResponse.json({ message: 'Job saved successfully', saved: true });
   } catch (error) {
     console.error('Save job error:', error);
@@ -70,6 +73,8 @@ export async function DELETE(request) {
       user: session.userId,
       jobId: jobId
     });
+
+    await bumpCacheVersion(cacheKeys.savedJobsVersion(session.userId));
 
     return NextResponse.json({ message: 'Job unsaved successfully', saved: false });
   } catch (error) {

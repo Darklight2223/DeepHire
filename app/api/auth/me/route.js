@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../[...nextauth]/route';
 import dbConnect from '../../../lib/dbConnect';
 import User from '../../../models/user';
+import { cacheKeys, getCacheVersion, getCachedJson } from '../../../lib/redisCache';
 
 export async function GET() {
   try {
@@ -20,13 +21,20 @@ export async function GET() {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ 
-      user: { 
-        userId: user._id,
-        email: user.email,
-        name: user.name
-      } 
-    });
+    const version = await getCacheVersion(cacheKeys.profileVersion(user._id.toString()));
+    const payload = await getCachedJson(
+      cacheKeys.authMe(user._id.toString(), version),
+      1800,
+      async () => ({
+        user: {
+          userId: user._id,
+          email: user.email,
+          name: user.name
+        }
+      })
+    );
+
+    return NextResponse.json(payload);
   } catch (err) {
     return NextResponse.json({ error: 'Invalid session' }, { status: 401 });
   }
